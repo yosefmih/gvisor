@@ -46,14 +46,11 @@ type FSSaveOpts struct {
 	PagesMetadataFile io.WriteCloser
 	PagesFile         stateio.AsyncWriter
 
-	// If Reflink is true, page contents are captured by cloning each
-	// checkpointed filesystem's backing file into the corresponding entry of
-	// FilestoreFiles with ioctl(FICLONE), rather than by copying them to
-	// PagesFile. The i-th checkpointed filesystem in manifest order is cloned
-	// into FilestoreFiles[i], and len(FilestoreFiles) must equal the number
-	// of checkpointed filesystems. Cloning requires each destination file to
-	// be on the same reflink-capable host filesystem as the corresponding
-	// backing file.
+	// If Reflink is true, page contents are captured by ioctl(FICLONE)ing
+	// each checkpointed filesystem's backing file into the corresponding
+	// entry of FilestoreFiles (in manifest order), rather than by copying
+	// them to PagesFile. len(FilestoreFiles) must equal the number of
+	// checkpointed filesystems.
 	Reflink        bool
 	FilestoreFiles []*fd.FD
 
@@ -313,10 +310,9 @@ func fsCheckpointPathsMatch(pathsMap map[checkpoint.ResourceID]struct{}, resourc
 }
 
 // FSCheckpointResources returns the ResourceIDs of the filesystems that would
-// be included in a filesystem checkpoint with the given paths. The result's
-// order is unspecified and may differ from checkpoint order; in particular,
-// filesystem creation or destruction concurrent with a subsequent FSSave may
-// change the set of checkpointed filesystems.
+// be included in a filesystem checkpoint with the given paths, in unspecified
+// order. Filesystem creation or destruction concurrent with a subsequent
+// FSSave may change the checkpointed set.
 func (k *Kernel) FSCheckpointResources(ctx context.Context, paths []checkpoint.ResourceID) []checkpoint.ResourceID {
 	pathsMap := fsCheckpointPathsMap(paths)
 	fss := k.vfs.GetFilesystems()

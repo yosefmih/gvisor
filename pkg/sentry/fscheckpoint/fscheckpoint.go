@@ -66,14 +66,6 @@ import (
 func CloneErrorHint(err error) string {
 	switch {
 	case errors.Is(err, unix.EXDEV):
-		// EXDEV means vfs_clone_file_range saw different superblocks. The
-		// common trap is not the files being on different disks, but the
-		// filestore FD belonging to an overlayfs mount: with runsc flag
-		// -overlay2 medium "self", the filestore is created inside the
-		// container's rootfs, which under container runtimes is an overlayfs
-		// mount, and overlayfs does not support FICLONE. runsc normally
-		// avoids this by reopening such filestores via the overlay's upper
-		// layer at container creation; this errno means that didn't happen.
 		return "the filestore file and the checkpoint file are on different filesystems as seen by the kernel; if the overlaid mount is an overlayfs mount (e.g. a container rootfs), runsc reopens \"self\"-medium filestores via the overlay upper layer at container creation - check runsc create logs for \"Filestore\" warnings to see why that did not happen, or use an -overlay2 \"dir=\" medium whose directory is on the same reflink-capable filesystem as the checkpoint"
 	case errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTTY):
 		return "the host filesystem does not support FICLONE; reflink filesystem checkpoints require e.g. XFS with reflink=1 or Btrfs"

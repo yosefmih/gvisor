@@ -25,25 +25,19 @@ import (
 )
 
 // maybeReopenFilestoreInUpperLayer returns a file referring directly to the
-// host filesystem file backing filestoreFile, when the filestore is inside an
-// overlayfs mount (e.g. a container root filesystem set up by containerd with
-// a "self"-medium overlay filestore). In that case filestoreFile's FD is an
-// overlayfs inode, on which FICLONE always fails with EXDEV, even though the
-// file's data lives in the overlay's upper layer; a file in the upper layer
-// shares its inode and page cache with the overlayfs file, so an FD opened
-// directly on the upper layer path is interchangeable for data operations and
-// additionally supports FICLONE if the upper filesystem does.
+// host filesystem file backing filestoreFile when the filestore is inside an
+// overlayfs mount (e.g. a container rootfs under containerd). Overlayfs FDs
+// don't support FICLONE, as needed by reflink filesystem checkpoints, but a
+// pure-upper file shares its inode and page cache with its overlayfs view, so
+// an FD opened via the overlay's upperdir is interchangeable for data
+// operations and additionally supports FICLONE if the upper filesystem does.
 //
-// The filestore was opened at nsPath as seen inside the gofer's mount
-// namespace, reached via goferRootfs ("/proc/<gofer pid>/root"); the overlay
-// mount is resolved from that namespace's mountinfo, and the upper layer file
-// is also opened through goferRootfs so that this works regardless of the
-// gofer's mount namespace and chroot configuration.
-//
-// On success, filestoreFile is closed and the upper layer file is returned.
-// On any failure the reopen is skipped and filestoreFile is returned
-// unchanged; this only forgoes FICLONE support, which is reported when it is
-// actually needed (reflink filesystem checkpoints).
+// nsPath is the filestore's path inside the gofer's mount namespace, reached
+// via goferRootfs ("/proc/<gofer pid>/root"); the overlay mount is resolved
+// from that namespace's mountinfo and the upper file is opened through the
+// same proc root, making this independent of the gofer's namespace and chroot
+// configuration. On any failure, filestoreFile is returned unchanged, which
+// only forgoes FICLONE support.
 func maybeReopenFilestoreInUpperLayer(filestoreFile *os.File, goferRootfs, nsPath string) *os.File {
 	var stfs unix.Statfs_t
 	if err := unix.Fstatfs(int(filestoreFile.Fd()), &stfs); err != nil || stfs.Type != unix.OVERLAYFS_SUPER_MAGIC {

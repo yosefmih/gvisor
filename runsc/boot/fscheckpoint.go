@@ -304,9 +304,8 @@ type fsRestore struct {
 	mfs         map[checkpoint.ResourceID]*fscheckpoint.MemoryFile
 	tmpfs       map[checkpoint.ResourceID]*fscheckpoint.Tmpfs
 	// filestores maps each MemoryFile's ResourceID to its cloned backing file
-	// in a reflink checkpoint. Files are retained for the lifetime of the
-	// sandbox so that restarted containers can restore their filesystems
-	// again.
+	// in a reflink checkpoint; files are retained so that restarted
+	// containers can restore again.
 	filestores map[checkpoint.ResourceID]*fd.FD
 
 	waitMu  sync.Mutex
@@ -321,11 +320,10 @@ type fsRestoreContainer struct {
 	err        error
 	asyncLoads int // number of MemoryFiles currently in async page loading
 	cond       sync.Cond
-	// offered are the ResourceIDs of the checkpointable filesystems created
-	// for this container, whether or not the checkpoint contained them.
+	// offered are the checkpointable filesystems created for this container,
+	// whether or not the checkpoint contained them; claimed counts those
+	// restored from the checkpoint.
 	offered []checkpoint.ResourceID
-	// claimed is the number of offered filesystems that were restored from
-	// the checkpoint.
 	claimed int
 }
 
@@ -605,8 +603,7 @@ func (c *fsRestoreContainer) setError(err error) error {
 
 // memoryFileLoadArgs returns the pages metadata reader, pages file offset,
 // cloned backing file (non-nil iff the checkpoint is a reflink checkpoint),
-// and load-completion callback for restoring the MemoryFile with the given
-// ResourceID.
+// and load-completion callback for restoring the given MemoryFile.
 func (fsr *fsRestore) memoryFileLoadArgs(id checkpoint.ResourceID, cid string) (io.Reader, uint64, *fd.FD, func(error), error) {
 	if fsr == nil {
 		return nil, 0, nil, func(error) {}, nil
@@ -688,11 +685,10 @@ func (fsr *fsRestore) tmpfsSourceTar(id checkpoint.ResourceID, cid string) (io.R
 }
 
 // checkRestored returns an error if the filesystem checkpoint contains
-// filesystems that should have been restored into the container with the
-// given name, but were not. It must be called after the container's mounts
-// have been created (which is when checkpointed filesystems are claimed), and
-// exists so that misconfigured restores fail loudly at container creation
-// instead of silently starting the container with empty filesystems.
+// filesystems that should have been restored into the given container but
+// were not, so that misconfigured restores fail loudly instead of silently
+// starting the container with empty filesystems. It must be called after the
+// container's mounts have been created.
 func (fsr *fsRestore) checkRestored(containerName, cid string) error {
 	if fsr == nil {
 		return nil

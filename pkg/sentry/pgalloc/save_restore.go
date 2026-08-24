@@ -183,13 +183,10 @@ type SaveOpts struct {
 	// size, if the application has many committed zero pages.
 	ExcludeCommittedZeroPages bool
 
-	// If PagesInBackingFile is true, page contents are not written at all;
+	// If PagesInBackingFile is true, SaveTo() writes only metadata to w;
 	// callers are responsible for separately preserving the MemoryFile's
-	// backing file (e.g. by cloning it with FICLONE), and restoring with
-	// LoadOpts.PagesInBackingFile. SaveTo() writes only metadata to w, and
-	// skips the zero-page scan since page contents are preserved verbatim.
-	//
-	// PagesInBackingFile is mutually exclusive with PagesFile and
+	// backing file (e.g. by cloning it with FICLONE) and restoring with
+	// LoadOpts.PagesInBackingFile. Mutually exclusive with PagesFile and
 	// ExcludeCommittedZeroPages.
 	PagesInBackingFile bool
 }
@@ -218,10 +215,8 @@ func (f *MemoryFile) SaveTo(ctx context.Context, w io.Writer, opts *SaveOpts) er
 		if opts.PagesFile != nil {
 			return fmt.Errorf("SaveOpts.PagesInBackingFile is mutually exclusive with SaveOpts.PagesFile")
 		}
-		// Page contents are preserved in the backing file by the caller, so
-		// only metadata needs to be written. Skip the zero-page scan; it only
-		// serves to reduce the volume of explicitly-saved pages, and no pages
-		// are explicitly saved in this mode.
+		// The zero-page scan is skipped: it only reduces the volume of
+		// explicitly-saved pages, and no pages are saved in this mode.
 		return f.saveMetadataTo(w)
 	}
 
@@ -1039,10 +1034,8 @@ type LoadOpts struct {
 
 	// If PagesInBackingFile is true, the MemoryFile's backing file already
 	// contains all page contents (e.g. it was cloned from a checkpoint taken
-	// with SaveOpts.PagesInBackingFile), so no page contents are read from r
-	// or PagesFile; only metadata is read from r.
-	//
-	// PagesInBackingFile is mutually exclusive with PagesFile.
+	// with SaveOpts.PagesInBackingFile), so only metadata is read from r.
+	// Mutually exclusive with PagesFile.
 	PagesInBackingFile bool
 
 	// Optional timeline for the restore process.

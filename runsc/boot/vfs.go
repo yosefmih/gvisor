@@ -1248,9 +1248,8 @@ func createPrivateMemoryFile(file *os.File, resourceID checkpoint.ResourceID, ci
 			DoneCallback:    onLoadEnd,
 		}
 		if filestoreFile != nil {
-			// Clone the checkpointed backing file into the new filestore
-			// (NewMemoryFile truncated it to 0 above), so that page contents
-			// don't need to be loaded at all.
+			// The clone must happen after NewMemoryFile, which truncates the
+			// new filestore, and replaces page loading entirely.
 			if err := unix.IoctlFileClone(int(file.Fd()), filestoreFile.FD()); err != nil {
 				err = fmt.Errorf("failed to clone checkpointed backing file for %q: %w (%s)", resourceID, err, fscheckpoint.CloneErrorHint(err))
 				onLoadEnd(err)
