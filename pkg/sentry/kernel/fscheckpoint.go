@@ -209,7 +209,7 @@ func (k *Kernel) FSSave(ctx context.Context, opts *FSSaveOpts) error {
 					return fmt.Errorf("checkpoint has more than %d filesystems, but only %d filestore files were provided; filesystems may have been created concurrently with the checkpoint", len(opts.FilestoreFiles), len(opts.FilestoreFiles))
 				}
 				if err := unix.IoctlFileClone(opts.FilestoreFiles[idx].FD(), mf.FD()); err != nil {
-					return fmt.Errorf("failed to clone backing file for %s: %w (reflink filesystem checkpoints require that the image path is on the same reflink-capable host filesystem as tmpfs filestore files)", resourceID, err)
+					return fmt.Errorf("failed to clone backing file for %s: %w (%s)", resourceID, err, fscheckpoint.CloneErrorHint(err))
 				}
 			}
 			manifest.MemoryFiles = append(manifest.MemoryFiles, &fspb.MemoryFile{

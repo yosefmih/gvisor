@@ -48,6 +48,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/devices/tpuproxy/vfio"
 	"gvisor.dev/gvisor/pkg/sentry/devices/ttydev"
 	"gvisor.dev/gvisor/pkg/sentry/devices/tundev"
+	"gvisor.dev/gvisor/pkg/sentry/fscheckpoint"
 	cgroup2fs "gvisor.dev/gvisor/pkg/sentry/fsimpl/cgroup2fs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/cgroupfs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/dev"
@@ -1251,7 +1252,7 @@ func createPrivateMemoryFile(file *os.File, resourceID checkpoint.ResourceID, ci
 			// (NewMemoryFile truncated it to 0 above), so that page contents
 			// don't need to be loaded at all.
 			if err := unix.IoctlFileClone(int(file.Fd()), filestoreFile.FD()); err != nil {
-				err = fmt.Errorf("failed to clone checkpointed backing file for %q: %w (reflink filesystem checkpoints require that the checkpoint is on the same reflink-capable host filesystem as tmpfs filestore files)", resourceID, err)
+				err = fmt.Errorf("failed to clone checkpointed backing file for %q: %w (%s)", resourceID, err, fscheckpoint.CloneErrorHint(err))
 				onLoadEnd(err)
 				mf.Destroy()
 				return nil, err

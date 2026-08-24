@@ -99,6 +99,26 @@ Requirements and caveats:
     tmpfs filestore files, and that filesystem must support `FICLONE` (e.g.
     XFS with `reflink=1`, or Btrfs). ext4 does not support `FICLONE`.
 
+*   "Same host filesystem" is determined by the filesystem of the *file
+    descriptor*, not by where the bytes physically live. In particular, the
+    default `-overlay2` medium `self` creates the filestore inside the
+    container's root filesystem; under container runtimes such as containerd,
+    that root is an overlayfs mount, so the filestore FD is an overlayfs inode
+    and `FICLONE` always fails with `EXDEV` — even when the overlay upper
+    layer is on the same reflink-capable filesystem as the image path. To use
+    `--reflink` in such environments, configure an `-overlay2` `dir=` medium
+    whose directory is on the reflink-capable filesystem, e.g.
+    `--overlay2=root:dir=/mnt/nvme/filestores`. (Note that `dir=`-medium
+    filestore files are unlinked after creation, so the directory will appear
+    empty while sandboxes are running.)
+
+*   No fsync is performed on the checkpoint files: the clone and the metadata
+    writes are durable against sandbox failure as soon as `runsc fscheckpoint`
+    returns, but not against host crashes until the host filesystem commits
+    them. Callers that need crash durability before acting on a snapshot (e.g.
+    before deleting the sandbox) should fsync the image directory contents
+    themselves.
+
 *   Reflink snapshots use snapshot format version 2, comprising the manifest,
     multi-tar, and pages metadata files plus one `filestore.<i>.img` file per
     saved filesystem (instead of a single `pages.img`). Restore requires no
