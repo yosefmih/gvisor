@@ -1600,6 +1600,15 @@ func (l *Loader) createContainerProcess(info *containerInfo) (*kernel.ThreadGrou
 		info.procArgs.StartupTimeline.Reached("OCI seccomp filters applied")
 	}
 
+	// The container's filesystems now exist, so filesystem checkpoint
+	// restore (if any) has claimed everything it is going to claim for this
+	// container; fail loudly if the checkpoint expected more.
+	if l.fsRestore != nil {
+		if err := l.fsRestore.checkRestored(info.containerName, info.cid); err != nil {
+			return nil, nil, fmt.Errorf("filesystem checkpoint restore: %w", err)
+		}
+	}
+
 	return tg, ttyFile, nil
 }
 

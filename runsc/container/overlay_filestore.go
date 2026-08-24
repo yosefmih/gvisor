@@ -25,7 +25,7 @@ import (
 )
 
 // maybeReopenFilestoreInUpperLayer returns a file referring directly to the
-// host filesystem file backing filestoreFile, when filestorePath is inside an
+// host filesystem file backing filestoreFile, when the filestore is inside an
 // overlayfs mount (e.g. a container root filesystem set up by containerd with
 // a "self"-medium overlay filestore). In that case filestoreFile's FD is an
 // overlayfs inode, on which FICLONE always fails with EXDEV, even though the
@@ -34,25 +34,38 @@ import (
 // directly on the upper layer path is interchangeable for data operations and
 // additionally supports FICLONE if the upper filesystem does.
 //
+// The filestore was opened at nsPath as seen inside the gofer's mount
+// namespace, reached via goferRootfs ("/proc/<gofer pid>/root"); the overlay
+// mount is resolved from that namespace's mountinfo, and the upper layer file
+// is also opened through goferRootfs so that this works regardless of the
+// gofer's mount namespace and chroot configuration.
+//
 // On success, filestoreFile is closed and the upper layer file is returned.
 // On any failure the reopen is skipped and filestoreFile is returned
 // unchanged; this only forgoes FICLONE support, which is reported when it is
 // actually needed (reflink filesystem checkpoints).
-func maybeReopenFilestoreInUpperLayer(filestoreFile *os.File, filestorePath string) *os.File {
+func maybeReopenFilestoreInUpperLayer(filestoreFile *os.File, goferRootfs, nsPath string) *os.File {
 	var stfs unix.Statfs_t
 	if err := unix.Fstatfs(int(filestoreFile.Fd()), &stfs); err != nil || stfs.Type != unix.OVERLAYFS_SUPER_MAGIC {
 		return filestoreFile
 	}
-	mountinfo, err := os.ReadFile("/proc/self/mountinfo")
+	filestorePath := filepath.Join(goferRootfs, nsPath)
+	procDir, ok := strings.CutSuffix(goferRootfs, "/root")
+	if !ok {
+		log.Warningf("Filestore %q is on overlayfs, but %q is not a /proc/[pid]/root path; reflink filesystem checkpoints will not work", filestorePath, goferRootfs)
+		return filestoreFile
+	}
+	mountinfo, err := os.ReadFile(procDir + "/mountinfo")
 	if err != nil {
 		log.Warningf("Filestore %q is on overlayfs, but reading mountinfo failed: %v; reflink filesystem checkpoints will not work", filestorePath, err)
 		return filestoreFile
 	}
-	upperPath, err := overlayUpperPath(mountinfo, filestorePath)
+	upperNSPath, err := overlayUpperPath(mountinfo, nsPath)
 	if err != nil {
 		log.Warningf("Filestore %q is on overlayfs, but resolving its upper layer file failed: %v; reflink filesystem checkpoints will not work", filestorePath, err)
 		return filestoreFile
 	}
+	upperPath := filepath.Join(goferRootfs, upperNSPath)
 	upperFD, err := unix.Open(upperPath, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		log.Warningf("Filestore %q is on overlayfs, but opening its upper layer file %q failed: %v; reflink filesystem checkpoints will not work", filestorePath, upperPath, err)

@@ -118,12 +118,21 @@ Requirements and caveats:
     after creation, so the directory will appear empty while sandboxes are
     running.)
 
-*   No fsync is performed on the checkpoint files: the clone and the metadata
-    writes are durable against sandbox failure as soon as `runsc fscheckpoint`
-    returns, but not against host crashes until the host filesystem commits
-    them. Callers that need crash durability before acting on a snapshot (e.g.
-    before deleting the sandbox) should fsync the image directory contents
-    themselves.
+*   By default no fsync is performed on the checkpoint files: the clone and
+    the metadata writes are durable against sandbox failure as soon as `runsc
+    fscheckpoint` returns, but not against host crashes until the host
+    filesystem commits them. Pass `--sync` to fsync the image directory
+    contents after saving completes (after the sandbox has already resumed,
+    so this does not extend the pause), making the checkpoint crash-durable
+    before the command returns.
+
+*   Restoring fails at container creation, rather than silently starting the
+    container with empty filesystems, when the checkpoint contains
+    filesystems that the new sandbox does not restore: when a container's
+    name appears in the checkpoint but the container provides no matching
+    disk-backed overlay (e.g. a read-only root or an overlay medium of
+    `none`), and when a container has checkpointable filesystems but its name
+    matches nothing in the checkpoint.
 
 *   Reflink snapshots use snapshot format version 2, comprising the manifest,
     multi-tar, and pages metadata files plus one `filestore.<i>.img` file per

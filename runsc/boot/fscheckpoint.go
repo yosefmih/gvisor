@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -310,6 +311,9 @@ type fsRestore struct {
 
 	waitMu  sync.Mutex
 	waitMap map[string]*fsRestoreContainer // key is container ID
+	// claimedIDs contains the checkpoint's ResourceIDs that some container's
+	// filesystem has been restored from. Protected by waitMu.
+	claimedIDs map[checkpoint.ResourceID]bool
 }
 
 type fsRestoreContainer struct {
@@ -317,6 +321,12 @@ type fsRestoreContainer struct {
 	err        error
 	asyncLoads int // number of MemoryFiles currently in async page loading
 	cond       sync.Cond
+	// offered are the ResourceIDs of the checkpointable filesystems created
+	// for this container, whether or not the checkpoint contained them.
+	offered []checkpoint.ResourceID
+	// claimed is the number of offered filesystems that were restored from
+	// the checkpoint.
+	claimed int
 }
 
 // fsRestoreOpts holds options to startFSRestore.
@@ -443,6 +453,7 @@ func startFSRestore(opts *fsRestoreOpts) (*fsRestore, error) {
 		tmpfs:      make(map[checkpoint.ResourceID]*fscheckpoint.Tmpfs),
 		filestores: make(map[checkpoint.ResourceID]*fd.FD),
 		waitMap:    make(map[string]*fsRestoreContainer),
+		claimedIDs: make(map[checkpoint.ResourceID]bool),
 	}
 	filestoreFiles := opts.FilestoreFiles
 	opts.FilestoreFiles = nil
@@ -606,6 +617,9 @@ func (fsr *fsRestore) memoryFileLoadArgs(id checkpoint.ResourceID, cid string) (
 		return nil, 0, nil, nil, fsr.manifestErr
 	}
 	mmf := fsr.mfs[id]
+	fsr.waitMu.Lock()
+	fsr.ensureContainer(cid).offered = append(fsr.ensureContainer(cid).offered, id)
+	fsr.waitMu.Unlock()
 	if mmf == nil {
 		return nil, 0, nil, func(error) {}, nil
 	}
@@ -627,6 +641,8 @@ func (fsr *fsRestore) memoryFileLoadArgs(id checkpoint.ResourceID, cid string) (
 			return nil, 0, nil, nil, c.setError(fmt.Errorf("MemoryFile %q has no filestore file in the filesystem checkpoint", mmf.ResourceID))
 		}
 	}
+	c.claimed++
+	fsr.claimedIDs[id] = true
 	c.asyncLoads++
 	return bytes.NewReader(pagesMetadata[mmf.PagesMetadataStart:mmf.PagesMetadataEnd]), mmf.PagesStart, filestoreFile, func(err error) {
 		fsr.waitMu.Lock()
@@ -669,6 +685,53 @@ func (fsr *fsRestore) tmpfsSourceTar(id checkpoint.ResourceID, cid string) (io.R
 		return nil, c.setError(fmt.Errorf("failed to read tar archive: %w", err))
 	}
 	return nil, c.setError(fmt.Errorf("tmpfs %q has tar range [%d, %d) beyond multi-tar file size %d", mt.ResourceID, mt.TarStart, mt.TarEnd, len(multiTar)))
+}
+
+// checkRestored returns an error if the filesystem checkpoint contains
+// filesystems that should have been restored into the container with the
+// given name, but were not. It must be called after the container's mounts
+// have been created (which is when checkpointed filesystems are claimed), and
+// exists so that misconfigured restores fail loudly at container creation
+// instead of silently starting the container with empty filesystems.
+func (fsr *fsRestore) checkRestored(containerName, cid string) error {
+	if fsr == nil {
+		return nil
+	}
+	fsr.wg.Wait()
+	if fsr.manifestErr != nil {
+		return fsr.manifestErr
+	}
+	fsr.waitMu.Lock()
+	defer fsr.waitMu.Unlock()
+	var unclaimedForName, unclaimedAll []checkpoint.ResourceID
+	for id := range fsr.mfs {
+		if !fsr.claimedIDs[id] {
+			unclaimedAll = append(unclaimedAll, id)
+			if id.ContainerName == containerName {
+				unclaimedForName = append(unclaimedForName, id)
+			}
+		}
+	}
+	var offered []checkpoint.ResourceID
+	claimed := 0
+	if c := fsr.waitMap[cid]; c != nil {
+		offered = c.offered
+		claimed = c.claimed
+	}
+	sortResourceIDs(unclaimedForName)
+	sortResourceIDs(unclaimedAll)
+	sortResourceIDs(offered)
+	if len(unclaimedForName) > 0 {
+		return fmt.Errorf("filesystem checkpoint contains filesystems %v for container %q, but they were not restored; the container created checkpointable filesystems %v. Each checkpointed path must correspond to a disk-backed overlay in the new container: a read-only root or an overlay medium of \"none\" provides no filesystem to restore into", unclaimedForName, containerName, offered)
+	}
+	if len(offered) > 0 && claimed == 0 && len(unclaimedAll) > 0 {
+		return fmt.Errorf("filesystem checkpoint contains filesystems %v, none of which match container %q's checkpointable filesystems %v; container names must match between checkpoint and restore", unclaimedAll, containerName, offered)
+	}
+	return nil
+}
+
+func sortResourceIDs(ids []checkpoint.ResourceID) {
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 }
 
 // wait blocks until either all filesystems have been restored for the

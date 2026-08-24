@@ -1212,7 +1212,8 @@ func (c *Container) createGoferFilestoreInSelf(goferRootfs string, mountSrc stri
 		// may have already set up the filestore.
 		createFlags |= unix.O_EXCL
 	}
-	filestorePath := path.Join(goferRootfs, boot.SelfFilestorePath(mountSrc, c.sandboxID()))
+	nsPath := boot.SelfFilestorePath(mountSrc, c.sandboxID())
+	filestorePath := path.Join(goferRootfs, nsPath)
 	filestoreFD, err := unix.Open(filestorePath, createFlags, 0666)
 	if err != nil {
 		if err == unix.EEXIST {
@@ -1235,7 +1236,7 @@ func (c *Container) createGoferFilestoreInSelf(goferRootfs string, mountSrc stri
 	// container rootfs under containerd), the FD opened above is an overlayfs
 	// inode, which doesn't support FICLONE as needed by reflink filesystem
 	// checkpoints; reopen the backing file from the overlay's upper layer.
-	return maybeReopenFilestoreInUpperLayer(filestoreFile, filestorePath), nil
+	return maybeReopenFilestoreInUpperLayer(filestoreFile, goferRootfs, nsPath), nil
 }
 
 func (c *Container) createGoferFilestoreInDir(goferRootfs string, filestoreDir string) (*os.File, error) {
