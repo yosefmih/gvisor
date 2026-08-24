@@ -103,14 +103,20 @@ Requirements and caveats:
     descriptor*, not by where the bytes physically live. In particular, the
     default `-overlay2` medium `self` creates the filestore inside the
     container's root filesystem; under container runtimes such as containerd,
-    that root is an overlayfs mount, so the filestore FD is an overlayfs inode
-    and `FICLONE` always fails with `EXDEV` — even when the overlay upper
-    layer is on the same reflink-capable filesystem as the image path. To use
-    `--reflink` in such environments, configure an `-overlay2` `dir=` medium
-    whose directory is on the reflink-capable filesystem, e.g.
-    `--overlay2=root:dir=/mnt/nvme/filestores`. (Note that `dir=`-medium
-    filestore files are unlinked after creation, so the directory will appear
-    empty while sandboxes are running.)
+    that root is an overlayfs mount, and overlayfs inodes never support
+    `FICLONE` (it fails with `EXDEV`) — even when the overlay upper layer is
+    on a reflink-capable filesystem. To make `--reflink` work with the `self`
+    medium, runsc automatically reopens such filestore files via the overlay
+    mount's upper layer directory (resolved from `/proc/self/mountinfo`), so
+    the FD refers directly to the underlying host filesystem; if that
+    resolution fails, a warning is logged at container creation and
+    `--reflink` reports the failure. The upper layer must then be on a
+    reflink-capable filesystem shared with the image path. Alternatively, an
+    `-overlay2` `dir=` medium whose directory is on the reflink-capable
+    filesystem (e.g. `--overlay2=root:dir=/mnt/nvme/filestores`) avoids
+    overlayfs entirely. (Note that `dir=`-medium filestore files are unlinked
+    after creation, so the directory will appear empty while sandboxes are
+    running.)
 
 *   No fsync is performed on the checkpoint files: the clone and the metadata
     writes are durable against sandbox failure as soon as `runsc fscheckpoint`

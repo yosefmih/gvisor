@@ -1230,7 +1230,12 @@ func (c *Container) createGoferFilestoreInSelf(goferRootfs string, mountSrc stri
 	// and apply any limits appropriately (like local ephemeral storage
 	// limits). So don't delete it. These files will be unlinked when the
 	// container is destroyed. This makes self medium appropriate for k8s.
-	return os.NewFile(uintptr(filestoreFD), filestorePath), nil
+	filestoreFile := os.NewFile(uintptr(filestoreFD), filestorePath)
+	// If the mount being overlaid is itself an overlayfs mount (e.g. a
+	// container rootfs under containerd), the FD opened above is an overlayfs
+	// inode, which doesn't support FICLONE as needed by reflink filesystem
+	// checkpoints; reopen the backing file from the overlay's upper layer.
+	return maybeReopenFilestoreInUpperLayer(filestoreFile, filestorePath), nil
 }
 
 func (c *Container) createGoferFilestoreInDir(goferRootfs string, filestoreDir string) (*os.File, error) {
