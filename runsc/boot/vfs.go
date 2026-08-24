@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/ib"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/abi/nvgpu"
@@ -47,6 +48,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/devices/tpuproxy/vfio"
 	"gvisor.dev/gvisor/pkg/sentry/devices/ttydev"
 	"gvisor.dev/gvisor/pkg/sentry/devices/tundev"
+	"gvisor.dev/gvisor/pkg/sentry/fscheckpoint"
 	cgroup2fs "gvisor.dev/gvisor/pkg/sentry/fsimpl/cgroup2fs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/cgroupfs"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/dev"
@@ -1216,7 +1218,7 @@ func parseKeyValue(s string) (string, string, bool) {
 }
 
 func createPrivateMemoryFile(file *os.File, resourceID checkpoint.ResourceID, cid string, fsr *fsRestore) (*pgalloc.MemoryFile, error) {
-	pagesMetadataReader, pagesFileOffset, onLoadEnd, err := fsr.memoryFileLoadArgs(resourceID, cid)
+	pagesMetadataReader, pagesFileOffset, filestoreFile, onLoadEnd, err := fsr.memoryFileLoadArgs(resourceID, cid)
 	if err != nil {
 		return nil, err
 	}
@@ -1240,11 +1242,24 @@ func createPrivateMemoryFile(file *os.File, resourceID checkpoint.ResourceID, ci
 	}
 	if pagesMetadataReader != nil {
 		log.Infof("Loading filesystem checkpoint data for %q", resourceID)
-		if err := mf.LoadFrom(context.Background(), pagesMetadataReader, &pgalloc.LoadOpts{
+		loadOpts := pgalloc.LoadOpts{
 			PagesFile:       fsr.apfl,
 			PagesFileOffset: pagesFileOffset,
 			DoneCallback:    onLoadEnd,
-		}); err != nil {
+		}
+		if filestoreFile != nil {
+			// The clone must happen after NewMemoryFile, which truncates the
+			// new filestore, and replaces page loading entirely.
+			if err := unix.IoctlFileClone(int(file.Fd()), filestoreFile.FD()); err != nil {
+				err = fmt.Errorf("failed to clone checkpointed backing file for %q: %w (%s)", resourceID, err, fscheckpoint.CloneErrorHint(err))
+				onLoadEnd(err)
+				mf.Destroy()
+				return nil, err
+			}
+			loadOpts.PagesFile = nil
+			loadOpts.PagesInBackingFile = true
+		}
+		if err := mf.LoadFrom(context.Background(), pagesMetadataReader, &loadOpts); err != nil {
 			mf.Destroy()
 			return nil, err
 		}

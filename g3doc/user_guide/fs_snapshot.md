@@ -78,6 +78,83 @@ To restore a filesystem snapshot, pass the directory containing the snapshot to
 runsc create --fs-restore-image-path=<path> <container ID>
 ```
 
+## Reflink Snapshots
+
+By default, saving a filesystem snapshot copies the contents of all saved files
+while the sandbox is paused, so the pause duration is proportional to the
+amount of saved data. Passing `--reflink` to `runsc fscheckpoint` instead
+captures file contents by cloning each filesystem's disk-backed filestore file
+using `ioctl(FICLONE)`, which shares extents copy-on-write at the host
+filesystem level. Since cloning is a metadata operation, the sandbox pause
+duration becomes proportional to the amount of filesystem *metadata* (number
+of files) rather than data, typically reducing it by orders of magnitude.
+
+```bash
+runsc fscheckpoint --image-path=<path> --reflink <container ID>
+```
+
+Requirements and caveats:
+
+*   The `--image-path` directory must be on the same host filesystem as the
+    tmpfs filestore files, and that filesystem must support `FICLONE` (e.g.
+    XFS with `reflink=1`, or Btrfs). ext4 does not support `FICLONE`.
+
+*   "Same host filesystem" is determined by the filesystem of the *file
+    descriptor*, not by where the bytes physically live. In particular, the
+    default `-overlay2` medium `self` creates the filestore inside the
+    container's root filesystem; under container runtimes such as containerd,
+    that root is an overlayfs mount, and overlayfs inodes never support
+    `FICLONE` (it fails with `EXDEV`) — even when the overlay upper layer is
+    on a reflink-capable filesystem. To make `--reflink` work with the `self`
+    medium, runsc automatically reopens such filestore files via the overlay
+    mount's upper layer directory (resolved from `/proc/self/mountinfo`), so
+    the FD refers directly to the underlying host filesystem; if that
+    resolution fails, a warning is logged at container creation and
+    `--reflink` reports the failure. The upper layer must then be on a
+    reflink-capable filesystem shared with the image path. Alternatively, an
+    `-overlay2` `dir=` medium whose directory is on the reflink-capable
+    filesystem (e.g. `--overlay2=root:dir=/mnt/nvme/filestores`) avoids
+    overlayfs entirely. (Note that `dir=`-medium filestore files are unlinked
+    after creation, so the directory will appear empty while sandboxes are
+    running.)
+
+*   By default no fsync is performed on the checkpoint files: the clone and
+    the metadata writes are durable against sandbox failure as soon as `runsc
+    fscheckpoint` returns, but not against host crashes until the host
+    filesystem commits them. Pass `--sync` to fsync the image directory
+    contents after saving completes (after the sandbox has already resumed,
+    so this does not extend the pause), making the checkpoint crash-durable
+    before the command returns.
+
+*   Restoring fails at container creation, rather than silently starting the
+    container with empty filesystems, when the checkpoint contains
+    filesystems that the new sandbox does not restore: when a container's
+    name appears in the checkpoint but the container provides no matching
+    disk-backed overlay (e.g. a read-only root or an overlay medium of
+    `none`), and when a container has checkpointable filesystems but its name
+    matches nothing in the checkpoint.
+
+*   Reflink snapshots use snapshot format version 2, comprising the manifest,
+    multi-tar, and pages metadata files plus one `filestore.<i>.img` file per
+    saved filesystem (instead of a single `pages.img`). Restore requires no
+    additional flags: `runsc create --fs-restore-image-path` detects the
+    format from the manifest. Restoring clones the saved filestore files back
+    into place, so restore also completes without copying file contents when
+    the snapshot directory is on the same host filesystem as the new sandbox's
+    filestore files.
+
+*   `--reflink` is incompatible with `--direct` and with checkpoints stored
+    directly in GCS.
+
+*   Reflink snapshots can currently only be taken with the `runsc
+    fscheckpoint` command; the application-driven trigger
+    (`/proc/gvisor/fscheckpoint`) always uses the copying format.
+
+*   Snapshot files written by `--reflink` share disk extents with the live
+    filestore files until either is modified or deleted. Writes made by the
+    sandbox after a `--leave-running` snapshot incur extent-level
+    copy-on-write cost in the host filesystem until the snapshot is deleted.
+
 ## Application-Driven Filesystem Checkpoint
 
 gVisor also lets the workload *inside* the sandbox trigger filesystem

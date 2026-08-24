@@ -1212,7 +1212,8 @@ func (c *Container) createGoferFilestoreInSelf(goferRootfs string, mountSrc stri
 		// may have already set up the filestore.
 		createFlags |= unix.O_EXCL
 	}
-	filestorePath := path.Join(goferRootfs, boot.SelfFilestorePath(mountSrc, c.sandboxID()))
+	nsPath := boot.SelfFilestorePath(mountSrc, c.sandboxID())
+	filestorePath := path.Join(goferRootfs, nsPath)
 	filestoreFD, err := unix.Open(filestorePath, createFlags, 0666)
 	if err != nil {
 		if err == unix.EEXIST {
@@ -1230,7 +1231,8 @@ func (c *Container) createGoferFilestoreInSelf(goferRootfs string, mountSrc stri
 	// and apply any limits appropriately (like local ephemeral storage
 	// limits). So don't delete it. These files will be unlinked when the
 	// container is destroyed. This makes self medium appropriate for k8s.
-	return os.NewFile(uintptr(filestoreFD), filestorePath), nil
+	filestoreFile := os.NewFile(uintptr(filestoreFD), filestorePath)
+	return maybeReopenFilestoreInUpperLayer(filestoreFile, goferRootfs, nsPath), nil
 }
 
 func (c *Container) createGoferFilestoreInDir(goferRootfs string, filestoreDir string) (*os.File, error) {

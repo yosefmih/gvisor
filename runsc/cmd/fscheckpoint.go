@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/subcommands"
@@ -36,6 +37,8 @@ type FSCheckpoint struct {
 	imagePath    string
 	leaveRunning bool
 	direct       bool
+	reflink      bool
+	sync         bool
 	paths        pathVar
 }
 
@@ -101,6 +104,8 @@ func (c *FSCheckpoint) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&c.imagePath, "image-path", "", "directory path to saved filesystem checkpoint")
 	f.BoolVar(&c.leaveRunning, "leave-running", false, "if true, resume containers after checkpointing; if false, containers exit with status 0 after checkpointing")
 	f.BoolVar(&c.direct, "direct", false, "use O_DIRECT for writing checkpoint files")
+	f.BoolVar(&c.reflink, "reflink", false, "capture page contents by cloning tmpfs filestore files with FICLONE instead of copying them. Requires -image-path to be on the same reflink-capable host filesystem (e.g. XFS with reflink=1, Btrfs) as the filestore files. Incompatible with -direct.")
+	f.BoolVar(&c.sync, "sync", false, "fsync the checkpoint files and image directory after saving completes (after the sandbox has resumed), making the checkpoint durable against host crashes before the command returns")
 	f.Var(&c.paths, "path", `path inside the container to save to the checkpoint (can be repeated). Format: [container_id:]path. The special path value "all-tmpfs" saves all tmpfs mounts from the OCI spec that are disk-backed. Defaults to "/" if not specified.`)
 }
 
@@ -140,13 +145,53 @@ func (c *FSCheckpoint) Execute(_ context.Context, f *flag.FlagSet, args ...any) 
 		paths = []checkpoint.ResourceID{{Path: "/"}}
 	}
 
+	if c.direct && c.reflink {
+		util.Fatalf("-direct and -reflink are mutually exclusive")
+	}
+
 	if err := cont.FSSave(conf, c.imagePath, sandbox.FSSaveOpts{
 		Direct:          c.direct,
+		Reflink:         c.reflink,
 		ExitAfterSaving: !c.leaveRunning,
 		Paths:           paths,
 	}); err != nil {
 		util.Fatalf("filesystem checkpoint saving failed: %v", err)
 	}
 
+	if c.sync {
+		if err := syncDir(c.imagePath); err != nil {
+			util.Fatalf("syncing filesystem checkpoint failed: %v", err)
+		}
+	}
+
 	return subcommands.ExitSuccess
+}
+
+// syncDir fsyncs every regular file in dir, then dir itself.
+func syncDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		if err := syncFile(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return syncFile(dir)
+}
+
+func syncFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("fsync %q: %w", path, err)
+	}
+	return nil
 }

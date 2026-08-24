@@ -18,5 +18,6 @@ go_library(
     deps = [
         ":fscheckpoint_proto_go_proto",
         "//pkg/sentry/checkpoint",
+        "@org_golang_x_sys//unix:go_default_library",
     ],
 )

@@ -484,6 +484,11 @@ type Args struct {
 	// If FSRestoreCheckpointGofer is true, Args.FSRestoreFDs contains only one
 	// FD, which is a socket connected to a checkpoint gofer.
 	FSRestoreCheckpointGofer bool
+	// If FSRestoreReflink is true, the filesystem checkpoint is a reflink
+	// checkpoint (manifest version 2), and Args.FSRestoreFDs contains the
+	// manifest, multi-tar, and pages metadata files followed by one cloned
+	// filestore file per checkpointed filesystem.
+	FSRestoreReflink bool
 	// FSSaveFDs are FDs used for user-triggered filesystem checkpoint saving.
 	FSSaveFDs []*fd.FD
 	// If FSSaveCheckpointGofer is true, Args.FSSaveFDs contains only one FD,
@@ -1593,6 +1598,12 @@ func (l *Loader) createContainerProcess(info *containerInfo) (*kernel.ThreadGrou
 			return nil, nil, fmt.Errorf("appending seccomp filters: %w", err)
 		}
 		info.procArgs.StartupTimeline.Reached("OCI seccomp filters applied")
+	}
+
+	if l.fsRestore != nil {
+		if err := l.fsRestore.checkRestored(info.containerName, info.cid); err != nil {
+			return nil, nil, fmt.Errorf("filesystem checkpoint restore: %w", err)
+		}
 	}
 
 	return tg, ttyFile, nil
